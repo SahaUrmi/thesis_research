@@ -56,6 +56,14 @@ section {
 .top .right {
   width: 29%;
 }
+.education,
+.honoursAndAwards,
+.technicalSkills,
+.languageProficiency,
+.organizationalActivities
+{
+  display: none;
+}
 .education h3,
 .professional h3,
 .publications h3,
