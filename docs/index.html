@@ -1,1 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Tau Trajectories Viewer</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 980px; margin: 24px auto; padding: 0 16px; }
+  .card { border: 1px solid #e5e5e5; border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  label { font-weight: 600; }
+  input[type="number"] { width: 80px; padding: 6px 8px; border-radius: 8px; border: 1px solid #ccc; }
+  button { padding: 8px 14px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+  #log { font-size: 12px; white-space: pre-wrap; background: #f8f8f8; padding: 8px; border-radius: 8px; max-height: 200px; overflow: auto; }
+  #traj, #loss { width: 100%; height: 420px; }
+</style>
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/jhuapl-boss/npyjs/npyjs.js"></script>
+</head>
+<body>
+<h2>Tau / FNO – Trajectory & Loss Viewer</h2>
+
+<div class="card">
+  <div class="row">
+    <div>
+      <div class="row"><label>Ground Truth (.npy)</label><input id="gtFile" type="file" accept=".npy"></div>
+      <div class="row"><label>Prediction (.npy)</label><input id="predFile" type="file" accept=".npy"></div>
+      <div class="row"><label>Loss (CSV or JSON)</label><input id="lossFile" type="file" accept=".csv,.json"></div>
+    </div>
+    <div>
+      <b>Status</b>
+      <div id="log"></div>
+    </div>
+  </div>
+  <hr/>
+  <div class="row">
+    <label>Nodes to show</label><input id="numNodes" type="number" min="1" value="10">
+    <label>Start node index</label><input id="startNode" type="number" min="0" value="0">
+    <button id="plotBtn">Plot</button>
+    <button id="downloadCsv">Download Pred vs GT (CSV)</button>
+  </div>
+</div>
+
+<div class="card"><b>Trajectories (GT vs Pred)</b><div id="traj"></div></div>
+<div class="card"><b>Loss Curve</b><div id="loss"></div></div>
+
+<script>
+const logEl = document.getElementById('log');
+function log(s){ logEl.textContent += s + "\\n"; logEl.scrollTop = logEl.scrollHeight; }
+
+let GT=null, GTshape=null, PRED=null, Pshape=null, LOSS={train:[], test:[]};
+
+async function readNpy(file){
+  return new Promise((resolve,reject)=>{
+    const r = new FileReader();
+    r.onload = async () => {
+      try { const npy = new npyjs(); const out = await npy.parse(r.result); resolve(out); }
+      catch(e){ reject(e); }
+    };
+    r.onerror = () => reject(r.error);
+    r.readAsArrayBuffer(file);
+  });
+}
+function ensure2D(data, shape){
+  let arr = data, shp = shape.slice();
+  if (shp.length === 1) shp = [1, shp[0]];
+  else if (shp.length === 3) { const N=shp[1], T=shp[2]; arr = data.slice(0, N*T); shp = [N,T]; }
+  else if (shp.length !== 2) throw new Error("Expected [N,T] (or [B,N,T]/[T]).");
+  return {arr, shp};
+}
+function to2DArray(arr, N, T){
+  const Z = new Array(N);
+  for(let i=0;i<N;i++){ const row = new Array(T); for(let t=0;t<T;t++) row[t] = arr[i*T + t]; Z[i] = row; }
+  return Z;
+}
+document.getElementById('gtFile').onchange = async (e)=>{
+  if(!e.target.files.length) return;
+  try { const {data,shape} = await readNpy(e.target.files[0]); const {arr,shp} = ensure2D(data, shape);
+        GT=arr; GTshape=shp; log(`GT loaded: [${shp}]`); } catch(err){ log('GT error: '+err.message); }
+};
+document.getElementById('predFile').onchange = async (e)=>{
+  if(!e.target.files.length) return;
+  try { const {data,shape} = await readNpy(e.target.files[0]); const {arr,shp} = ensure2D(data, shape);
+        PRED=arr; Pshape=shp; log(`Pred loaded: [${shp}]`); } catch(err){ log('Pred error: '+err.message); }
+};
+document.getElementById('lossFile').onchange = async (e)=>{
+  if(!e.target.files.length) return;
+  const file = e.target.files[0]; const txt = await file.text();
+  try {
+    if (file.name.endsWith('.json')) { const j=JSON.parse(txt); LOSS.train=j.train||[]; LOSS.test=j.test||[]; }
+    else { const lines = txt.trim().split(/\\r?\\n/).slice(1); LOSS.train=[]; LOSS.test=[];
+           for(const ln of lines){ const [ep,tr,te]=ln.split(',').map(Number);
+             if(!Number.isNaN(tr)) LOSS.train.push(tr);
+             if(!Number.isNaN(te)) LOSS.test.push(te);
+           } }
+    log(`Loss loaded: train=${LOSS.train.length}, test=${LOSS.test.length}`);
+  } catch(err){ log('Loss parse error: '+err.message); }
+};
+document.getElementById('plotBtn').onclick = ()=>{
+  if(!GT || !PRED){ log('Load both GT and Pred .npy first.'); return; }
+  if(GTshape.join(',') !== Pshape.join(',')){ log('Shape mismatch between GT and Pred.'); return; }
+  const N=GTshape[0], T=GTshape[1];
+  const start = Math.max(0, +document.getElementById('startNode').value|0);
+  const k = Math.max(1, +document.getElementById('numNodes').value|0);
+  const end = Math.min(N, start+k);
+  const GT2D = to2DArray(GT, N, T), P2D = to2DArray(PRED, N, T);
+  const traces=[];
+  for(let i=start;i<end;i++){
+    traces.push({x:[...Array(T).keys()], y:GT2D[i], name:`GT node ${i}`,  mode:'lines', line:{width:1.2}});
+    traces.push({x:[...Array(T).keys()], y:P2D[i],  name:`Pred node ${i}`,mode:'lines', line:{width:1.2, dash:'dot'}});
+  }
+  Plotly.newPlot('traj', traces, {xaxis:{title:'Time'}, yaxis:{title:'Tau'}, margin:{t:20}, legend:{orientation:'h'}},{responsive:true});
+  const lt=[];
+  if(LOSS.train.length) lt.push({x:[...LOSS.train.keys()], y:LOSS.train, name:'Train', mode:'lines'});
+  if(LOSS.test.length)  lt.push({x:[...LOSS.test.keys()],  y:LOSS.test,  name:'Test',  mode:'lines'});
+  if(lt.length) Plotly.newPlot('loss', lt, {xaxis:{title:'Epoch'}, yaxis:{title:'MSE'}, margin:{t:20}, legend:{orientation:'h'}},{responsive:true});
+  else Plotly.purge('loss');
+  log(`Plotted nodes [${start}..${end-1}] over T=${T}.`);
+};
+document.getElementById('downloadCsv').onclick = ()=>{
+  if(!GT || !PRED) return;
+  const N=GTshape[0], T=GTshape[1]; const GT2D=to2DArray(GT,N,T), P2D=to2DArray(PRED,N,T);
+  const lines=['node,time,gt,pred'];
+  for(let i=0;i<N;i++){ for(let t=0;t<T;t++){ lines.push(`${i},${t},${GT2D[i][t]},${P2D[i][t]}`); } }
+  const blob = new Blob([lines.join('\\n')], {type:'text/csv'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download='trajectories_gt_pred.csv'; a.click();
+  URL.revokeObjectURL(a.href);
+};
+</script>
+</body>
+</html>
 
