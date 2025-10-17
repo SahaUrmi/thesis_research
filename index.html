@@ -1,232 +1,344 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Tau Trajectories Mini Viewer</title>
-<style>
-  body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 24px auto; padding: 0 16px; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  .card { border: 1px solid #e5e5e5; border-radius: 12px; padding: 14px; }
-  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  label { font-weight: 600; }
-  select, input[type="number"], input[type="text"] { padding: 6px 8px; border-radius: 8px; border: 1px solid #ccc; }
-  button { padding: 8px 14px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
-  #log { font-size: 12px; white-space: pre-wrap; background: #f8f8f8; padding: 8px; border-radius: 8px; max-height: 200px; overflow: auto; }
-  #traj, #loss { width: 100%; height: 420px; }
-</style>
-<!-- Plotly for line charts -->
-<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-<!-- npy loader -->
-<script src="https://cdn.jsdelivr.net/gh/jhuapl-boss/npyjs/npyjs.js"></script>
-<!-- Optional: onnxruntime-web (keep for later if you want in-browser inference) -->
-<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tau Playground • v0.2</title>
+  <!-- Tailwind (CDN build for quick prototyping) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js for quick plots (optional placeholder) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root{
+      --teal-900:#0f3b46; /* deep hero */
+      --teal-800:#134a57;
+      --teal-600:#1d6a7d;
+      --teal-500:#21819a;
+      --panel:#ffffff;
+      --canvas:#f3f6f8;
+      --ink:#27323a;
+      --muted:#6b7b86;
+      --accent-blue:#2b6cb0; /* inputs/lines */
+      --accent-orange:#dd6b20; /* outputs/points */
+    }
+    * { scrollbar-width: thin; }
+    body{ background:var(--canvas); color:var(--ink); }
+    .hero-grad{ background:linear-gradient(180deg,var(--teal-900),var(--teal-800)); }
+    .toolbar{ box-shadow: 0 10px 30px rgba(0,0,0,.08); }
+    .badge{ @apply px-2 py-1 bg-slate-100 rounded-lg; }
+  </style>
 </head>
-<body>
-
-<h2>Tau / FNO – Trajectory & Loss Viewer</h2>
-<p style="color:#666;margin-top:-8px">Client-only. Start with file uploads (GT/Pred/Loss). You can wire up ONNX inference later.</p>
-
-<div class="grid">
-  <div class="card">
-    <div class="row"><label>Ground Truth (.npy)</label><input id="gtFile" type="file" accept=".npy"></div>
-    <div class="row"><label>Prediction (.npy)</label><input id="predFile" type="file" accept=".npy"></div>
-    <div class="row"><label>Loss (CSV or JSON)</label><input id="lossFile" type="file" accept=".csv,.json"></div>
-    <hr/>
-    <div class="row">
-      <label>Nodes to show</label>
-      <input id="numNodes" type="number" min="1" value="10" style="width:80px">
-      <label>Start node index</label>
-      <input id="startNode" type="number" min="0" value="0" style="width:80px">
-      <button id="plotBtn">Plot</button>
+<body class="min-h-screen text-slate-800">
+  <!-- Header -->
+  <header class="hero-grad text-white">
+    <div class="max-w-7xl mx-auto px-4 py-10 text-center">
+      <h1 class="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight">
+        Tinker With a <span class="font-bold">Tau Network</span> Right in Your Browser
+      </h1>
+      <p class="mt-3 text-white/80 text-sm md:text-base">Don’t worry, you can’t break it. Tune noise, layers, and data just like the classic playground.</p>
     </div>
-    <div class="row">
-      <button id="downloadCsv">Download Pred vs GT (CSV)</button>
+    <div class="bg-white text-slate-700">
+      <div class="max-w-7xl mx-auto px-4 py-3 grid grid-cols-12 gap-3 items-center toolbar">
+        <div class="col-span-12 md:col-span-4 flex items-center gap-2">
+          <button id="btn-reset" class="px-2 py-2 rounded-xl border border-slate-200 hover:bg-slate-50" title="Reset">⟲</button>
+          <button id="btn-play" class="px-3 py-2 rounded-xl bg-[var(--teal-600)] text-white hover:bg-[var(--teal-500)]" title="Play">▶</button>
+          <button id="btn-pause" class="px-2 py-2 rounded-xl border border-slate-200 hover:bg-slate-50" title="Pause">⏸</button>
+          <div class="ml-2 font-mono tracking-widest text-slate-500">Epoch <span id="epoch">000,000</span></div>
+        </div>
+        <div class="col-span-12 md:col-span-6 grid grid-cols-2 md:grid-cols-6 gap-2 text-sm">
+          <label class="flex items-center gap-2">LR
+            <input id="lr" type="number" step="0.0001" value="0.03" class="ml-2 w-full rounded-lg border px-2 py-1">
+          </label>
+          <label>Activation
+            <select id="activation" class="mt-1 w-full rounded-lg border px-2 py-1">
+              <option>Tanh</option>
+              <option>ReLU</option>
+              <option>GELU</option>
+            </select>
+          </label>
+          <label>Regularization
+            <select id="reg-type" class="mt-1 w-full rounded-lg border px-2 py-1">
+              <option>None</option>
+              <option>L2</option>
+            </select>
+          </label>
+          <label>Reg rate
+            <input id="reg" type="number" step="0.0001" value="0" class="mt-1 w-full rounded-lg border px-2 py-1">
+          </label>
+          <label>Problem
+            <select id="problem" class="mt-1 w-full rounded-lg border px-2 py-1">
+              <option>Regression</option>
+              <option>Classification</option>
+            </select>
+          </label>
+          <label>Modes
+            <input id="modes" type="number" min="4" value="16" class="mt-1 w-full rounded-lg border px-2 py-1">
+          </label>
+        </div>
+        <div class="col-span-12 md:col-span-2 flex items-center justify-end gap-3">
+          <label class="flex items-center gap-2 text-sm text-slate-600">
+            <input id="chk-autoclear" type="checkbox" class="accent-indigo-600" checked>
+            auto‑clear
+          </label>
+          <button id="btn-regenerate" class="px-3 py-2 rounded-xl bg-[var(--teal-600)] text-white hover:bg-[var(--teal-500)]">Regenerate</button>
+        </div>
+      </div>
     </div>
-  </div>
+  </header>
 
-  <div class="card">
-    <b>Status</b>
-    <div id="log"></div>
-  </div>
-</div>
+  <!-- Main -->
+  <main class="max-w-7xl mx-auto px-4 py-6 grid grid-cols-12 gap-4">
+    <!-- Controls sidebar -->
+    <aside class="col-span-12 lg:col-span-4 space-y-4">
+      <!-- DATA panel -->
+      <section class="bg-[var(--panel)] rounded-2xl shadow p-4">
+        <h2 class="font-semibold text-slate-700 mb-3">Data</h2>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-sm font-medium">Select dataset (.npy)</label>
+            <div class="mt-1 grid grid-cols-2 gap-2">
+              <input id="file-x" type="file" accept=".npy" class="block w-full text-sm" />
+              <input id="file-y" type="file" accept=".npy" class="block w-full text-sm" />
+            </div>
+            <p class="text-xs text-slate-500 mt-1">X: parameters / tau0 • Y: tau trajectories</p>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <label class="text-sm">Train ratio
+              <input id="ratio-train" type="range" min="50" max="95" value="80" class="w-full">
+              <span class="text-xs text-slate-500" id="ratio-train-val">80%</span>
+            </label>
+            <label class="text-sm">Noise ratio
+              <input id="ratio-noise" type="range" min="0" max="50" value="0" class="w-full">
+              <span class="text-xs text-slate-500" id="ratio-noise-val">0%</span>
+            </label>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <label class="text-sm">Batch size
+              <input id="batch-size" type="number" min="1" value="32" class="mt-1 w-full rounded-lg border px-2 py-1">
+            </label>
+            <label class="text-sm">Shuffle
+              <select id="shuffle" class="mt-1 w-full rounded-lg border px-2 py-1">
+                <option value="true" selected>On</option>
+                <option value="false">Off</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </section>
 
-<div class="card" style="margin-top:16px;">
-  <b>Trajectories (GT vs Pred)</b>
-  <div id="traj"></div>
-</div>
+      <!-- FEATURES panel -->
+      <section class="bg-[var(--panel)] rounded-2xl shadow p-4">
+        <h2 class="font-semibold text-slate-700 mb-3">Features</h2>
+        <div class="grid grid-cols-2 gap-2 text-sm">
+          <label class="flex items-center gap-2"><input type="checkbox" class="accent-indigo-600" checked> γ₁</label>
+          <label class="flex items-center gap-2"><input type="checkbox" class="accent-indigo-600" checked> λ₁</label>
+          <label class="flex items-center gap-2"><input type="checkbox" class="accent-indigo-600" checked> δ</label>
+          <label class="flex items-center gap-2"><input type="checkbox" class="accent-indigo-600" checked> ε</label>
+          <label class="flex items-center gap-2 col-span-2"><input type="checkbox" class="accent-indigo-600" checked> tau₀ (30 nodes)</label>
+        </div>
+        <div class="mt-3 text-sm">
+          <label class="block">Position subset (choose nodes)</label>
+          <div class="mt-2 flex flex-wrap gap-2" id="position-tags">
+            <!-- dynamically filled with 30 node chips; by default allow picking 2 (like your note) -->
+          </div>
+          <p class="text-xs text-slate-500 mt-1">Limit 2 positions (configurable later).</p>
+        </div>
+      </section>
 
-<div class="card" style="margin-top:16px;">
-  <b>Loss Curve</b>
-  <div id="loss"></div>
-</div>
+      <!-- MODEL panel -->
+      <section class="bg-[var(--panel)] rounded-2xl shadow p-4">
+        <h2 class="font-semibold text-slate-700 mb-3">Model</h2>
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <label>Learning rate
+            <input id="lr-model" type="number" step="0.0001" value="0.001" class="mt-1 w-full rounded-lg border px-2 py-1">
+          </label>
+          <label>Activation (fixed)
+            <select id="activation-model" class="mt-1 w-full rounded-lg border px-2 py-1">
+              <option>ReLU</option>
+              <option>GELU</option>
+              <option>Tanh</option>
+            </select>
+          </label>
+          <label>Regularization (λ)
+            <input id="reg-model" type="number" step="0.0001" value="0.0000" class="mt-1 w-full rounded-lg border px-2 py-1">
+          </label>
+          <label>Spectral modes (FNO)
+            <input id="modes-model" type="number" min="4" value="16" class="mt-1 w-full rounded-lg border px-2 py-1">
+          </label>
+        </div>
+        <div class="mt-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-sm font-medium">Layers</span>
+            <div class="flex gap-2">
+              <button id="btn-add-layer" class="px-2 py-1 rounded-lg border">+ layer</button>
+              <button id="btn-rem-layer" class="px-2 py-1 rounded-lg border">− layer</button>
+            </div>
+          </div>
+          <ul id="layer-list" class="space-y-2 text-sm">
+            <!-- Example layer row -->
+          </ul>
+        </div>
+      </section>
+    </aside>
 
-<script>
-const logEl = document.getElementById('log');
-function log(s){ logEl.textContent += s + "\\n"; logEl.scrollTop = logEl.scrollHeight; }
+    <!-- Output area -->
+    <section class="col-span-12 lg:col-span-8 space-y-4">
+      <div class="bg-[var(--panel)] rounded-2xl shadow p-4">
+        <div class="flex items-center gap-2">
+          <button data-tab="summary" class="tab-btn px-3 py-1 rounded-lg bg-slate-900 text-white">Summary</button>
+          <button data-tab="loss" class="tab-btn px-3 py-1 rounded-lg border">Loss</button>
+          <button data-tab="heatmap" class="tab-btn px-3 py-1 rounded-lg border">Heatmap</button>
+          <button data-tab="logs" class="tab-btn px-3 py-1 rounded-lg border">Logs</button>
+          <div class="ml-auto text-xs text-slate-500">Output pane</div>
+        </div>
+        <div id="tab-summary" class="tab mt-4">
+          <div id="summary-pane" class="text-sm text-slate-700 leading-relaxed">
+            <p>Welcome! Load your .npy files, adjust noise / layers, then hit <b>Regenerate</b>. This pane will summarize your configuration and results.</p>
+          </div>
+        </div>
+        <div id="tab-loss" class="tab mt-4 hidden">
+          <canvas id="loss-chart" height="220"></canvas>
+        </div>
+        <div id="tab-heatmap" class="tab mt-4 hidden">
+          <div class="aspect-[4/2] w-full grid place-items-center text-slate-400 border rounded-xl">Heatmap placeholder</div>
+        </div>
+        <div id="tab-logs" class="tab mt-4 hidden">
+          <pre id="logs" class="bg-slate-950 text-slate-100 rounded-xl p-3 text-xs overflow-auto max-h-80">[logs] Ready.</pre>
+        </div>
+      </div>
 
-let GT = null, GTshape = null;
-let PRED = null, Pshape = null;
-let LOSS = { train: [], test: [] };
+      <div class="text-xs text-slate-400">v0.2 — front‑end scaffolding with safe DOM init + sanity checks. TODO: wire to backend.</div>
+    </section>
+  </main>
 
-async function readNpy(file){
-  return new Promise((resolve,reject)=>{
-    const r = new FileReader();
-    r.onload = async () => {
-      try {
-        const npy = new npyjs();
-        const out = await npy.parse(r.result);
-        resolve(out); // {data: TypedArray, shape: [..]}
-      } catch(e){ reject(e); }
-    };
-    r.onerror = () => reject(r.error);
-    r.readAsArrayBuffer(file);
-  });
-}
+  <!-- Minimal interactivity to make the shell feel alive -->
+  <script>
+    // Wrap everything to ensure elements exist before we wire listeners
+    document.addEventListener('DOMContentLoaded', () => {
+      const q = (s, r=document) => r.querySelector(s);
+      const qa = (s, r=document) => Array.from(r.querySelectorAll(s));
 
-function ensure2D(data, shape) {
-  // Accept [N,T], [1,N,T], [B,N,T] (use first batch), [T]
-  let arr = data, shp = shape.slice();
-  if (shp.length === 1) { // [T] -> pretend [1,T]
-    shp = [1, shp[0]];
-  } else if (shp.length === 3) { // [B,N,T] -> take B=0
-    const B = shp[0], N = shp[1], T = shp[2];
-    arr = data.slice(0, N*T);
-    shp = [N, T];
-  } else if (shp.length === 2) {
-    // [N,T] good
-  } else if (shp.length === 4) { // [B,C,H,W] – not expected for trajectories
-    throw new Error("Got 4D tensor; expected [N,T] or [B,N,T] or [T].");
-  }
-  return {arr, shp};
-}
-
-function to2DArray(arr, N, T){
-  const Z = new Array(N);
-  for(let i=0;i<N;i++){
-    const row = new Array(T);
-    for(let t=0;t<T;t++) row[t] = arr[i*T + t];
-    Z[i] = row;
-  }
-  return Z;
-}
-
-document.getElementById('gtFile').onchange = async (e)=>{
-  if(!e.target.files.length) return;
-  try {
-    const {data, shape} = await readNpy(e.target.files[0]);
-    const {arr, shp} = ensure2D(data, shape);
-    GT = arr; GTshape = shp;
-    log(`GT loaded: shape=[${shp.join(',')}]`);
-  } catch(err){ log('GT error: '+err.message); }
-};
-
-document.getElementById('predFile').onchange = async (e)=>{
-  if(!e.target.files.length) return;
-  try {
-    const {data, shape} = await readNpy(e.target.files[0]);
-    const {arr, shp} = ensure2D(data, shape);
-    PRED = arr; Pshape = shp;
-    log(`Pred loaded: shape=[${shp.join(',')}]`);
-  } catch(err){ log('Pred error: '+err.message); }
-};
-
-document.getElementById('lossFile').onchange = async (e)=>{
-  if(!e.target.files.length) return;
-  const file = e.target.files[0];
-  const txt = await file.text();
-  try {
-    if (file.name.endsWith('.json')) {
-      const j = JSON.parse(txt);
-      LOSS.train = j.train || [];
-      LOSS.test = j.test || [];
-    } else {
-      // CSV: epoch,train,test
-      const lines = txt.trim().split(/\\r?\\n/).slice(1);
-      LOSS.train = []; LOSS.test = [];
-      for(const ln of lines){
-        const [ep,tr,te] = ln.split(',').map(x=>+x);
-        if(!isNaN(tr)) LOSS.train.push(tr);
-        if(!isNaN(te)) LOSS.test.push(te);
+      // --- Sanity tests (acts like lightweight test cases) ---
+      const mustExist = ['#btn-regenerate', '#chk-autoclear', '#ratio-train', '#ratio-noise', '#position-tags', '#layer-list', '#loss-chart'];
+      const missing = mustExist.filter(sel => !q(sel));
+      if (missing.length){
+        console.error('Missing required elements:', missing);
+        const log = q('#logs');
+        if (log) log.textContent += "\n[error] Missing required elements: " + missing.join(', ');
       }
-    }
-    log(`Loss loaded: train=${LOSS.train.length} pts, test=${LOSS.test.length} pts`);
-  } catch(err){ log('Loss parse error: '+err.message); }
-};
 
-document.getElementById('plotBtn').onclick = ()=>{
-  if(!GT || !PRED){ log('Load both GT and Pred .npy first.'); return; }
-  if(GTshape.join(',') !== Pshape.join(',')){ log('Shape mismatch between GT and Pred.'); return; }
+      // Train/Noise sliders labels
+      const attachPct = (id, out) => {
+        const el = q(id), outEl = q(out);
+        if (!el || !outEl) return;
+        outEl.textContent = el.value + '%';
+        el.addEventListener('input', e => outEl.textContent = e.target.value + '%');
+      };
+      attachPct('#ratio-train', '#ratio-train-val');
+      attachPct('#ratio-noise', '#ratio-noise-val');
 
-  const N = GTshape[0], T = GTshape[1];
-  const start = Math.max(0, +document.getElementById('startNode').value|0);
-  const k = Math.max(1, +document.getElementById('numNodes').value|0);
-  const end = Math.min(N, start + k);
+      // Node chips (30) with max 2 selected
+      const posWrap = q('#position-tags');
+      const maxSel = 2;
+      const state = { positions: new Set(), layers: [] };
+      if (posWrap){
+        for (let i=1;i<=30;i++) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = i;
+          b.className = 'px-2 py-1 rounded-lg border text-xs';
+          b.addEventListener('click', () => {
+            if (state.positions.has(i)) { state.positions.delete(i); b.classList.remove('bg-indigo-600','text-white'); }
+            else if (state.positions.size < maxSel) { state.positions.add(i); b.classList.add('bg-indigo-600','text-white'); }
+          });
+          posWrap.appendChild(b);
+        }
+      }
 
-  const GT2D = to2DArray(GT, N, T);
-  const P2D  = to2DArray(PRED, N, T);
+      // Layers UI
+      const layerList = q('#layer-list');
+      const renderLayers = () => {
+        if (!layerList) return;
+        layerList.innerHTML = '';
+        state.layers.forEach((n, idx) => {
+          const li = document.createElement('li');
+          li.className = 'flex items-center gap-2';
+          li.innerHTML = `<span class="px-2 py-1 bg-slate-100 rounded-lg">L${idx+1}</span>
+            <input type="range" min="4" max="256" value="${n}" class="flex-1" oninput="this.nextElementSibling.textContent=this.value">
+            <span class="w-10 text-right">${n}</span>`;
+          layerList.appendChild(li);
+        });
+        if (state.layers.length === 0) {
+          const li = document.createElement('li');
+          li.className = 'text-sm text-slate-500';
+          li.textContent = 'No hidden layers yet. Click "+ layer" to add one.';
+          layerList.appendChild(li);
+        }
+      };
+      const addBtn = q('#btn-add-layer');
+      const remBtn = q('#btn-rem-layer');
+      if (addBtn) addBtn.addEventListener('click', () => { state.layers.push(32); renderLayers(); });
+      if (remBtn) remBtn.addEventListener('click', () => { state.layers.pop(); renderLayers(); });
+      renderLayers();
 
-  const traces = [];
-  for(let i=start; i<end; i++){
-    traces.push({
-      x: [...Array(T).keys()],
-      y: GT2D[i],
-      name: `GT node ${i}`,
-      mode: 'lines',
-      line: { width: 1.2 }
+      // Tabs
+      qa('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
+        qa('.tab-btn').forEach(b => b.classList.remove('bg-slate-900','text-white'));
+        btn.classList.add('bg-slate-900','text-white');
+        const key = btn.dataset.tab;
+        qa('.tab').forEach(t => t.classList.add('hidden'));
+        const target = q('#tab-' + key);
+        if (target) target.classList.remove('hidden');
+      }));
+
+      // Dummy loss chart
+      const ctx = q('#loss-chart');
+      let chart = null;
+      if (ctx){
+        chart = new Chart(ctx, { type: 'line', data: { labels: [], datasets: [{ label: 'Loss', data: [], borderColor: getComputedStyle(document.documentElement).getPropertyValue('--accent-blue'), backgroundColor: 'rgba(43,108,176,0.15)', pointRadius: 0 }] }, options: { responsive: true, animation: false, scales: { y: { beginAtZero: true } }, plugins:{ legend:{display:false} } } });
+      }
+
+      // Regenerate behavior (front‑end only)
+      const regen = q('#btn-regenerate');
+      if (regen) regen.addEventListener('click', () => {
+        const auto = q('#chk-autoclear');
+        if (auto && auto.checked) {
+          const sum = q('#summary-pane'); if (sum) sum.innerHTML = '';
+          const logs = q('#logs'); if (logs) logs.textContent = '[logs] Cleared.';
+          if (chart){ chart.data.labels = []; chart.data.datasets[0].data = []; chart.update(); }
+        }
+        // Summarize current config (placeholder)
+        const conf = {
+          train: q('#ratio-train')?.value + '%',
+          noise: q('#ratio-noise')?.value + '%',
+          batch: q('#batch-size')?.value,
+          lr: q('#lr')?.value,
+          activation: q('#activation')?.value,
+          reg: q('#reg')?.value,
+          modes: q('#modes')?.value,
+          positions: Array.from(state.positions).sort(),
+          layers: state.layers.slice()
+        };
+        const pane = q('#summary-pane');
+        if (pane) pane.innerHTML = `<div class="space-y-1">
+          <div><b>Train split:</b> ${conf.train}</div>
+          <div><b>Noise:</b> ${conf.noise}</div>
+          <div><b>Batch size:</b> ${conf.batch}</div>
+          <div><b>LR / Act / Reg:</b> ${conf.lr} • ${conf.activation} • ${conf.reg}</div>
+          <div><b>Spectral modes:</b> ${conf.modes}</div>
+          <div><b>Positions:</b> ${conf.positions.join(', ') || '—'}</div>
+          <div><b>Layers:</b> ${conf.layers.length ? conf.layers.join(' → ') : '—'}</div>
+          <div class="text-xs text-slate-500">(Hook this button to your backend training to populate Loss/Heatmap.)</div>
+        </div>`;
+
+        // Fake a tiny training trace for feel
+        if (chart){
+          for (let i=0;i<20;i++) { chart.data.labels.push(i); chart.data.datasets[0].data.push( Math.exp(-i/5) + 0.02*Math.random()); }
+          chart.update();
+        }
+        const logs = q('#logs'); if (logs) logs.textContent += "\n[info] Simulated run completed.";
+      });
     });
-    traces.push({
-      x: [...Array(T).keys()],
-      y: P2D[i],
-      name: `Pred node ${i}`,
-      mode: 'lines',
-      line: { width: 1.2, dash: 'dot' }
-    });
-  }
-  Plotly.newPlot('traj', traces, {
-    xaxis: { title: 'Time step' },
-    yaxis: { title: 'Tau value' },
-    margin: { t: 20 },
-    legend: { orientation: 'h' }
-  }, {responsive:true});
-
-  // Loss
-  const lt = [];
-  if (LOSS.train.length) lt.push({ x: [...LOSS.train.keys()], y: LOSS.train, name: 'Train', mode: 'lines' });
-  if (LOSS.test.length)  lt.push({ x: [...LOSS.test.keys()],  y: LOSS.test,  name: 'Test',  mode: 'lines'  });
-  if (lt.length){
-    Plotly.newPlot('loss', lt, {
-      xaxis: { title: 'Epoch' },
-      yaxis: { title: 'MSE' },
-      margin: { t: 20 },
-      legend: { orientation: 'h' }
-    }, {responsive:true});
-  } else {
-    Plotly.purge('loss');
-  }
-
-  log(`Plotted nodes [${start}..${end-1}] over T=${T}.`);
-};
-
-document.getElementById('downloadCsv').onclick = ()=>{
-  if(!GT || !PRED){ return; }
-  const N = GTshape[0], T = GTshape[1];
-  const GT2D = to2DArray(GT, N, T);
-  const P2D  = to2DArray(PRED, N, T);
-
-  const lines = ['node,time,gt,pred'];
-  for(let i=0;i<N;i++){
-    for(let t=0;t<T;t++){
-      lines.push(`${i},${t},${GT2D[i][t]},${P2D[i][t]}`);
-    }
-  }
-  const blob = new Blob([lines.join('\\n')], {type: 'text/csv'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'trajectories_gt_pred.csv';
-  a.click();
-  URL.revokeObjectURL(a.href);
-};
-</script>
+  </script>
 </body>
 </html>
